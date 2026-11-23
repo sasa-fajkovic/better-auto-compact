@@ -84,7 +84,19 @@ Optional `config.json` next to the installed hook script:
 | `max_stop_blocks` | `2` | How often the agent may be held at the end of a turn to write the handoff after a nudge it did not act on |
 | `claude_window_tokens` | detected | Claude Code window size, if detection is wrong for your model |
 
-Turn it off for one session with `BETTER_AUTO_COMPACT=off`, or for a project by creating `.agent-handoff/DISABLED`.
+### Pause the handoff hook
+
+For one Codex session, set the environment variable on the launch command.
+
+```sh
+BETTER_AUTO_COMPACT=off codex
+```
+
+For Claude Code, use `BETTER_AUTO_COMPACT=off claude`. With either command, each hook invocation exits before reading the event. This skips handoff reminders, floor writes and recovery prompts. The client still compacts at its configured thresholds, including any set by the installer.
+
+To pause the hook for every client launched from your current shell, run `export BETTER_AUTO_COMPACT=off`. To make that the default for new interactive zsh shells, add the same line to `~/.zshrc`. To re-enable the hook, remove the line if you added it, run `unset BETTER_AUTO_COMPACT`, and relaunch the client. The hook accepts `off`, `false` and `0` case-insensitively.
+
+For a single project across sessions, create `.agent-handoff/DISABLED` at the repository root. Remove that file to re-enable the hook when the environment variable is unset.
 
 ## Uninstall
 

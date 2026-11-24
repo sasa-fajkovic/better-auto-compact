@@ -100,6 +100,8 @@ def claude_usage(path):
         if o.get("type") != "assistant" or o.get("isSidechain") or (o.get("timestamp") or "") < boundary:
             continue
         msg = o.get("message") or {}
+        if msg.get("model") == "<synthetic>":
+            continue
         u = msg.get("usage") or {}
         fill = sum(int(u.get(k) or 0) for k in ("input_tokens", "cache_creation_input_tokens",
                                                  "cache_read_input_tokens", "output_tokens"))
@@ -126,7 +128,8 @@ def new_boundary(path, offset):
                 observed = {"tokens": auto_pre_tokens(o), "model": model} if auto_pre_tokens(o) else observed
         elif '"assistant"' in line and '"model"' in line:
             o = parse(line)
-            if o.get("type") == "assistant" and not o.get("isSidechain"):
+            if o.get("type") == "assistant" and not o.get("isSidechain") and \
+                    (o.get("message") or {}).get("model") != "<synthetic>":
                 model = (o.get("message") or {}).get("model") or model
     return latest, observed, start + end
 

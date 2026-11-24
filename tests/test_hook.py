@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 import shutil
@@ -358,6 +359,17 @@ class ClaudeHook(HookCase):
                     cc_assistant(90000, ts="2026-01-01T00:00:01Z")])
         self.assertEqual(self.hook("PostToolUse"), "")
         self.assertEqual(self.hook("Stop"), "")
+
+    def test_synthetic_record_does_not_hide_context_fill(self):
+        self.write([cc_assistant(50000), {"type": "assistant", "timestamp": "2026-01-01T00:00:20Z", "message": {
+            "model": "<synthetic>", "usage": {"input_tokens": 0, "output_tokens": 0,
+                                              "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0},
+            "content": [{"type": "text", "text": "Autocompact is thrashing"}]}}])
+        spec = importlib.util.spec_from_file_location("handoff_hook", os.path.join(REPO, "hooks", "handoff_hook.py"))
+        hook = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(hook)
+        fill, model, _, _ = hook.claude_usage(self.transcript)
+        self.assertEqual((fill, model), (50000, "claude-sonnet-5-5"))
 
     def test_floor_summary_note_and_recovery(self):
         self.write([cc_user("Never use regex in durations.py."), cc_user("<system-reminder>x</system-reminder>"),

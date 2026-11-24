@@ -206,6 +206,30 @@ The rerun changes the task to read every document in full and in order first, an
 - None of the three variants made a difference, so none was adopted. At the last compaction the index named the right document for 96 of the 192 service values the model had read, and covered at least 6 of the 8 services fully in none of the 6 runs. Handoffs stayed under 8,000 bytes in every run (3.9 to 6.8 KB).
 - A handoff cannot keep every detail whose relevance shows up only later. The agent recovers those details by searching the files again. A task that forbids searching can lose them.
 
+## Asking the agent to delegate bulk reading
+
+Does one line in `CLAUDE.md` or `AGENTS.md` that asks the agent to hand bulk reading to subagents save context and cost? The line tested:
+
+> Delegate bulk reading and searching (many files, long logs, big command output) to subagents. Have each one return only what you need, with the file each value came from, so the raw output stays out of your context.
+
+Synthetic document sets with known answers: 40 documents (about 150k tokens, 40 values to find), the same 40 with reads capped at 4 documents per step, 80 documents with 16 changed values (6 of them changed twice), and a small task with 8 documents. The larger tasks end with a follow-up turn that asks, for 8 values, for the file and the exact sentence that set them. Claude Code 2.1.330 with Sonnet 5.5 and Opus 5.5, Codex CLI 0.171 with GPT-6.2 Astra. Variants: no line, the line in the instruction file, a test version of the hook adding a softer hint ("consider delegating it to a subagent that returns only what you need") to its note at session start, that hint in the instruction file instead, and the task prompt asking for delegation (Sonnet only). Six seeds per variant, each compared with the same seed without the line (Wilcoxon signed-rank on cost, McNemar on delegation). The rules for recommending the line were written before the runs.
+
+| Claude Code, change in main-phase cost vs no line | Line in instruction file | Hook hint |
+|---|---|---|
+| 40 and 80 documents, both models (24 pairs) | -6% (p=0.03) | -3% |
+| Same, Opus only (12 pairs) | -9% (p<0.001) | -5% |
+| Same, Sonnet only (12 pairs) | +1% | 0% |
+| 40 documents, 4 reads per step, Sonnet (6 pairs) | -45% (p=0.03) | -52% (p=0.06) |
+| 8 documents, Sonnet / Opus (6 pairs each) | -14% / -12% | -3% / -1% |
+
+- All 204 runs (156 Claude Code, 48 Codex) found every value and cited every source correctly, with and without the line.
+- Without the line, both models already delegated in all 24 runs on the 40- and 80-document tasks, so the line had little to add there. The rules asked for at least 50 points more delegation and at least 25% lower cost, so the line is not recommended in general. The hook hint never led to more delegation than the line.
+- With reads capped at 4 per step, Sonnet without the line never delegated and compacted 4 times per run. With the line it delegated in 6 of 6 runs and never compacted; with the hook hint it delegated in 5 of 6 and compacted 0.7 times per run.
+- On the 8-document task the line made both models delegate (6 of 6 runs, none without it). The hook hint did not, from the hook or in the instruction file (0 of 6), so the wording matters.
+- Asking for delegation in the task prompt (Sonnet) cost 7% less (p=0.03) on the 40- and 80-document tasks.
+- In 17 of the 156 Claude Code runs the agent scheduled a reminder to check on its subagents and did not cancel it after finishing. A non-interactive run then waits 4 to 20 minutes and spends one more turn on an expired cache. Leaving those turns out moves the 24-pair result from -6% to -8% (Sonnet: +1% to -2%). Wall times are not compared for that reason.
+- Codex delegated in 24 of 24 runs with the line and none without, with the same quality. Without the line Codex read the documents through scripts, so they never entered its context. With it, uncached input tokens rose about 11 times on 40 documents, 21 times on 80 and 41% on 8. With reads capped, uncached input was flat (-2%) and cached input rose 25%. The line is not recommended for Codex.
+
 ## End-to-end check
 
 The installer was run into fresh config dirs, then a live session ran in each harness until it compacted. In both harnesses, the nudge fired and the agent wrote `HANDOFF.md`. The floor was saved and the pointer was injected after compaction. The final answer recalled the branch, the build id and the docs URL exactly.

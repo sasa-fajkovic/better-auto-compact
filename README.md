@@ -98,6 +98,14 @@ To pause the hook for every client launched from your current shell, run `export
 
 For a single project across sessions, create `.agent-handoff/DISABLED` at the repository root. Remove that file to re-enable the hook when the environment variable is unset.
 
+## Delegating bulk reading
+
+The setup does not ask the agent to use subagents. If your Claude Code sessions often compact while reading many files, this line in `CLAUDE.md` avoided compaction and cut cost by 45% in a test where Sonnet did not delegate on its own:
+
+> Delegate bulk reading and searching (many files, long logs, big command output) to subagents. Have each one return only what you need, with the file each value came from, so the raw output stays out of your context.
+
+Where Sonnet and Opus already delegated on their own it saved little, and in Codex it raised token use several times over, so it is not part of the setup ([details](docs/experiments.md#asking-the-agent-to-delegate-bulk-reading)).
+
 ## Uninstall
 
 ```

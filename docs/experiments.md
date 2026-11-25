@@ -118,7 +118,7 @@ The orchestrator test at the real windows (1M in Claude Code, 475k in Codex): 15
 | Codex, 70% (~333k) | 150, 150 | 18, 18 | 1, 1 | 124M tokens |
 | Codex, default | 149, 150 | 18, 18 | 1, 1 | 170M tokens |
 
-Accuracy did not change with the compaction point. Cost fell with every step down: at 30%, 37% less in Claude Code and 61% fewer tokens in Codex than the default, because every call re-reads less context. Codex was given the limit as `model_auto_compact_token_limit`, so it also compacted mid-turn. The installer's default is 30% from this result, and for Codex it sets that same limit (142,500 for this model) next to the end-of-turn percentage.
+Accuracy did not change with the compaction point. Cost fell with every step down: at 30%, 37% less in Claude Code and 61% fewer tokens in Codex than the default, because every call re-reads less context. Codex was given the limit as `model_auto_compact_token_limit`, so it also compacted mid-turn. The installer initially defaulted to 30% from this result, and for Codex it set that same limit (142,500 for this model) next to the end-of-turn percentage. See the [README](../README.md#what-it-changes) for current defaults.
 
 The skill's text reached the agent in only one of these 16 runs. The transcript guard blocked reads of `SKILL.md` by full path, and all 5 Claude Code Skill tool calls failed with "Unknown skill", so the agent wrote its handoff from the hook's nudge alone. The exception is Codex 50% run 1, which read the skill with a `cat` by relative path that the guard missed; it matched its twin (98.7M vs 97.6M tokens, every result right). So the comparison between compaction points holds. The rerun below has the skill working.
 
@@ -166,7 +166,7 @@ Claude Code read 80 documents; reading all of them fills 955k tokens, just under
 
 ## A larger window and a later compaction point
 
-With `model_context_window = 1000000`, Codex caps the window at the model's maximum (872k for GPT-6.1 Terra) and uses 95% of it: 828,400 tokens. On that window and on Claude Code's 1M window, the 30% default was compared with compacting at about 400k: 41% in Claude Code, and `model_auto_compact_token_limit = 400000` in Codex. The Codex planning runs also set the end-of-turn percentage (30% or 48%); the orchestrator runs set only the token limit.
+With `model_context_window = 1000000`, Codex caps the window at the model's maximum (872k for GPT-6.1 Terra) and uses 95% of it: 828,400 tokens. On that window and on Claude Code's 1M window, the then-default 30% was compared with compacting at about 400k: 41% in Claude Code, and `model_auto_compact_token_limit = 400000` in Codex. The Codex planning runs also set the end-of-turn percentage (30% or 48%); the orchestrator runs set only the token limit.
 
 The orchestrator test from "Where to compact", with the same tasks and seeds and the skill working. The Claude Code 30% row is the one from "With the skill". Two runs per row.
 

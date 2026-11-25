@@ -147,7 +147,7 @@ class ClaudeHook(HookCase):
         put(os.path.join(self.base, "config.json"), "{}")
         auto = {"type": "system", "subtype": "compact_boundary", "timestamp": "2026-01-02T00:00:01Z",
                 "compactMetadata": {"trigger": "auto", "preTokens": 174000}}
-        self.write([cc_assistant(140000, ts="2026-01-01T00:00:01Z")])
+        self.write([cc_assistant(140000, ts="2026-01-02T00:00:00Z")])
         self.assertEqual(self.hook("PostToolUse"), "")
         with open(self.transcript, "a") as f:
             f.write(json.dumps(auto) + "\n")
@@ -156,6 +156,98 @@ class ClaudeHook(HookCase):
         self.assertIn("compact-handoff", self.hook("PostToolUse"))
         learned = json.loads(get(os.path.join(self.base, "state", "learned-claude.json")))
         self.assertEqual(learned, {"claude-sonnet-5-5": {"tokens": 174000, "expected": 967000}})
+
+    def idle_compaction(self, note, reply_ts="2026-01-02T00:00:00Z"):
+        self.learned({})
+        self.write([cc_assistant(140000, ts=reply_ts)])
+        self.hook("PostToolUse")
+        with open(self.transcript, "a") as f:
+            f.write(json.dumps({"type": "system", "subtype": "compact_boundary", "timestamp": "2026-01-02T01:00:01Z",
+                                "compactMetadata": {"trigger": "auto", "preTokens": 174000}}) + "\n")
+        self.hook("SessionStart", source="compact")
+        with open(self.transcript, "a") as f:
+            if note:
+                f.write(json.dumps({"type": "system", "subtype": "informational", "timestamp": "2026-01-02T01:00:02Z",
+                                    "content": "Compacted while idle, before the prompt cache expired"}) + "\n")
+            f.write(json.dumps(cc_assistant(140000, ts="2026-01-02T01:00:05Z")) + "\n")
+        self.hook("UserPromptSubmit", prompt="back")
+        self.assertEqual(self.hook("PostToolUse"), "")
+        self.assertEqual(json.loads(get(os.path.join(self.base, "state", "learned-claude.json"))), {})
+
+    def test_idle_compaction_is_not_learned(self):
+        self.idle_compaction(note=True, reply_ts="2026-01-02T00:59:59Z")
+
+    def boundary_line(self, ts, tokens):
+        return json.dumps({"type": "system", "subtype": "compact_boundary", "timestamp": ts,
+                           "compactMetadata": {"trigger": "auto", "preTokens": tokens}}) + "\n"
+
+    def idle_line(self, ts):
+        return json.dumps({"type": "system", "subtype": "informational", "timestamp": ts,
+                           "content": "Compacted while idle, before the prompt cache expired"}) + "\n"
+
+    def learned_now(self):
+        return json.loads(get(os.path.join(self.base, "state", "learned-claude.json")))
+
+    def test_compaction_after_a_long_pause_is_learned(self):
+        self.learned({})
+        self.write([cc_assistant(140000, ts="2026-01-02T00:00:00Z")])
+        self.hook("PostToolUse")
+        with open(self.transcript, "a") as f:
+            f.write(self.boundary_line("2026-01-02T01:00:01Z", 174000))
+            f.write(json.dumps(cc_assistant(30000, ts="2026-01-02T01:00:05Z")) + "\n")
+        self.hook("PostToolUse")
+        self.assertEqual(self.learned_now(), {"claude-sonnet-5-5": {"tokens": 174000, "expected": 967000}})
+
+    def test_idle_note_after_a_publishing_hook_call_still_drops_the_point(self):
+        self.learned({})
+        self.write([cc_assistant(140000, ts="2026-01-02T00:00:00Z")])
+        self.hook("PostToolUse")
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        with open(self.transcript, "a") as f:
+            f.write(self.boundary_line(now, 174000))
+        self.hook("UserPromptSubmit", prompt="back")
+        self.assertEqual(self.learned_now(), {})
+        with open(self.transcript, "a") as f:
+            f.write(self.idle_line(now))
+        self.hook("PostToolUse")
+        self.assertEqual(self.learned_now(), {})
+        self.assertFalse(json.loads(get(os.path.join(self.base, "state", "claude-s1.json")))["observed"])
+
+    def test_learned_point_stays_in_use_while_a_new_one_settles(self):
+        self.learned({"claude-sonnet-5-5": {"tokens": 174000, "expected": 967000}})
+        self.write([cc_assistant(100000, ts="2026-01-02T00:00:00Z")])
+        self.hook("PostToolUse")
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        with open(self.transcript, "a") as f:
+            f.write(self.boundary_line(now, 180000))
+            f.write(json.dumps(cc_assistant(140000, ts=now)) + "\n")
+        self.hook("SessionStart", source="compact")
+        self.hook("PostToolUse")
+        self.assertIn("compact-handoff", self.hook("PostToolUse"))
+
+    def test_idle_compaction_keeps_an_earlier_limit_compaction(self):
+        self.learned({})
+        self.write([cc_assistant(140000, ts="2026-01-02T00:00:00Z")])
+        self.hook("PostToolUse")
+        with open(self.transcript, "a") as f:
+            f.write(self.boundary_line("2026-01-02T01:00:01Z", 174000))
+            f.write(json.dumps(cc_assistant(30000, ts="2026-01-02T01:00:05Z")) + "\n")
+            f.write(self.boundary_line("2026-01-02T02:00:01Z", 150000))
+            f.write(self.idle_line("2026-01-02T02:00:02Z"))
+            f.write(json.dumps(cc_assistant(30000, ts="2026-01-02T02:00:05Z")) + "\n")
+        self.hook("PostToolUse")
+        self.assertEqual(self.learned_now(), {"claude-sonnet-5-5": {"tokens": 174000, "expected": 967000}})
+
+    def test_idle_compaction_is_not_learned_on_first_scan(self):
+        self.learned({})
+        self.write([cc_assistant(140000, ts="2026-01-02T00:59:59Z"),
+                    {"type": "system", "subtype": "compact_boundary", "timestamp": "2026-01-02T01:00:01Z",
+                     "compactMetadata": {"trigger": "auto", "preTokens": 174000}},
+                    {"type": "system", "subtype": "informational", "timestamp": "2026-01-02T01:00:02Z",
+                     "content": "Compacted while idle, before the prompt cache expired"},
+                    cc_assistant(140000, ts="2026-01-02T01:00:05Z")])
+        self.assertEqual(self.hook("PostToolUse"), "")
+        self.assertEqual(json.loads(get(os.path.join(self.base, "state", "learned-claude.json"))), {})
 
     def test_learned_point_applies_to_a_new_session(self):
         put(os.path.join(self.base, "config.json"), "{}")
@@ -221,7 +313,7 @@ class ClaudeHook(HookCase):
 
     def test_learning_keeps_other_models(self):
         self.learned({"claude-opus-5-5": {"tokens": 300000, "expected": 967000}})
-        self.write([cc_assistant(100000, ts="2026-01-01T00:00:01Z")])
+        self.write([cc_assistant(100000, ts="2026-01-02T00:00:00Z")])
         self.hook("PostToolUse")
         with open(self.transcript, "a") as f:
             f.write(json.dumps({"type": "system", "subtype": "compact_boundary", "timestamp": "2026-01-02T00:00:01Z",
@@ -233,7 +325,7 @@ class ClaudeHook(HookCase):
 
     def test_compaction_under_another_model_is_not_learned(self):
         self.learned({})
-        self.write([cc_assistant(100000, ts="2026-01-01T00:00:01Z", model="claude-opus-5-5")])
+        self.write([cc_assistant(100000, ts="2026-01-02T00:00:00Z", model="claude-opus-5-5")])
         self.hook("PostToolUse")
         with open(self.transcript, "a") as f:
             f.write(json.dumps({"type": "system", "subtype": "compact_boundary", "timestamp": "2026-01-02T00:00:01Z",

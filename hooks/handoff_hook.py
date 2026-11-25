@@ -1,3 +1,4 @@
+import datetime
 import hashlib
 import json
 import os
@@ -18,6 +19,7 @@ TOML_KEY = re.compile(r"""\s*(?:"([^"\\]+)"|'([^']+)'|([A-Za-z0-9_-]+))\s*=\s*(.
 SKILL = os.path.normpath(os.path.join(BASE, "..", "skills", "compact-handoff", "SKILL.md"))
 STATE_TTL = 14 * 86400
 SUBAGENT_RECENT = 120
+SETTLE = 10
 try:
     import fcntl
 except ImportError:
@@ -84,16 +86,38 @@ def auto_pre_tokens(o):
     return int(pre) if meta.get("trigger") == "auto" and isinstance(pre, int) and pre > 0 else None
 
 
+def seconds(ts):
+    try:
+        return datetime.datetime.fromisoformat(ts.replace("Z", "+00:00")).timestamp()
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def observation(o, model):
+    pre = auto_pre_tokens(o)
+    return {"tokens": pre, "model": model, "at": o.get("timestamp") or ""} if pre else None
+
+
+def idle_note(line):
+    if "Compacted while idle" not in line:
+        return False
+    o = parse(line)
+    return o.get("type") == "system" and not o.get("isSidechain")
+
+
 def claude_usage(path):
-    fill, model, boundary, observed = 0, "", "", None
+    fill, model, boundary, observed, before = 0, "", "", None, None
     for line in tail_lines(path):
         if '"compact_boundary"' in line:
             o = parse(line)
             if o.get("type") == "system" and o.get("subtype") == "compact_boundary" and not o.get("isSidechain"):
                 boundary = o.get("timestamp") or boundary
-                observed = {"tokens": auto_pre_tokens(o), "model": model} if auto_pre_tokens(o) else observed
+                before, observed = observed, observation(o, model) or observed
                 fill = 0
                 continue
+        if idle_note(line):
+            observed = before
+            continue
         if '"assistant"' not in line or '"usage"' not in line:
             continue
         o = parse(line)
@@ -116,22 +140,27 @@ def new_boundary(path, offset):
             f.seek(offset if offset <= size else 0)
             data = f.read()
     except OSError:
-        return None, None, offset
+        return None, None, False, offset
     start = offset if offset <= size else 0
     end = data.rfind(b"\n") + 1
-    latest, observed, model = None, None, ""
+    latest, observed, before, idle, model = None, None, None, False, ""
     for line in data[:end].decode("utf-8", "replace").splitlines():
         if '"compact_boundary"' in line:
             o = parse(line)
             if o.get("type") == "system" and o.get("subtype") == "compact_boundary" and not o.get("isSidechain"):
                 latest = o.get("timestamp") or "seen"
-                observed = {"tokens": auto_pre_tokens(o), "model": model} if auto_pre_tokens(o) else observed
+                before, observed = observed, observation(o, model) or observed
+        elif idle_note(line):
+            if latest is None:
+                idle = True
+            else:
+                observed = before
         elif '"assistant"' in line and '"model"' in line:
             o = parse(line)
             if o.get("type") == "assistant" and not o.get("isSidechain") and \
                     (o.get("message") or {}).get("model") != "<synthetic>":
                 model = (o.get("message") or {}).get("model") or model
-    return latest, observed, start + end
+    return latest, observed, idle, start + end
 
 
 def session_start_dir(path):
@@ -168,7 +197,8 @@ def learned_hard(state_dir, model, state, expected):
     obs = state.get("observed")
     if not isinstance(obs, dict):
         state["observed"] = obs = {}
-    if obs.get("publish"):
+    at = seconds(obs.get("at"))
+    if obs.get("publish") and (at is None or time.time() - at >= SETTLE):
         obs.pop("publish")
         if obs.get("model") != model:
             state["observed"] = obs = {}
@@ -179,7 +209,8 @@ def learned_hard(state_dir, model, state, expected):
                 learned[model] = {"tokens": obs["tokens"], "expected": expected}
                 return True
             update_learned(state_dir, publish)
-    entry = obs if obs.get("model") == model else update_learned(state_dir, lambda learned: False).get(model)
+    own = obs.get("model") == model and not obs.get("publish")
+    entry = obs if own else update_learned(state_dir, lambda learned: False).get(model)
     if isinstance(entry, dict) and entry.get("expected") == expected and isinstance(entry.get("tokens"), int):
         return entry["tokens"]
     return None
@@ -536,7 +567,11 @@ def main():
             if tail_observed:
                 state["observed"] = dict(tail_observed, model=tail_observed["model"] or state.get("model"), publish=True)
         else:
-            latest, observed, state["scan"] = new_boundary(tp, state["scan"])
+            latest, observed, idle, state["scan"] = new_boundary(tp, state["scan"])
+            pending = state.get("observed")
+            if idle and isinstance(pending, dict) and pending.get("publish") and \
+                    pending.get("at") == state.get("last_boundary"):
+                state["observed"] = None
             if latest and latest > (state.get("last_boundary") or ""):
                 state.update(last_boundary=latest, pending_recovery=True, armed_at=None, band=0, nudged=False,
                              stop_blocks=0)
